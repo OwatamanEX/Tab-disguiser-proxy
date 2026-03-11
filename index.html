@@ -539,7 +539,7 @@
 
       <div class="proxy-pill">
         <div class="dot"></div>
-        無料プロキシ経由 — インストール不要
+        自分専用プロキシ (Cloudflare) 搭載
       </div>
 
       <div class="field">
@@ -604,6 +604,7 @@ function showTab(name) {
 
 /* ── 無料CORSプロキシ一覧 ──────── */
 const PROXIES = [
+  { name: '自分専用プロキシ (Cloudflare)', build: u => `https://tab-disguiser.owatamanmkll.workers.dev/proxy?url=${encodeURIComponent(u)}` },
   { name: 'allorigins.win',  build: u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
   { name: 'corsproxy.io',    build: u => `https://corsproxy.io/?${encodeURIComponent(u)}` },
   { name: 'thingproxy',      build: u => `https://thingproxy.freeboard.io/fetch/${u}` },
@@ -666,7 +667,7 @@ function rewriteHtml(html, base) {
 }
 
 async function tryProxy(targetUrl, proxy) {
-  const res = await fetch(proxy.build(targetUrl), { signal: AbortSignal.timeout(12000) });
+  const res = await fetch(proxy.build(targetUrl));
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const html = await res.text();
   if (!html.trim()) throw new Error('空のレスポンス');
