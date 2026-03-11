@@ -641,27 +641,57 @@ function applyFavicon(v) {
   document.head.appendChild(link);
 }
 
-function rewriteHtml(html, base) {
+function rewriteHtml(html, base, proxyBuilder) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const baseUrl = new URL(base);
-  const fix = (el, attr) => {
-    const v = el.getAttribute(attr);
-    if (!v || /^(data:|blob:|javascript:|#|mailto:)/.test(v)) return;
-    try { el.setAttribute(attr, new URL(v, baseUrl).href); } catch {}
+
+  // 絶対URLに変換してからプロキシ経由にする
+  const toProxied = (v, isLink) => {
+    if (!v || /^(data:|blob:|javascript:|#|mailto:)/.test(v.trim())) return v;
+    let abs;
+    try { abs = new URL(v.trim(), baseUrl).href; } catch { return v; }
+    // リンク（a href）はプロキシ経由ナビゲーション
+    if (isLink) return proxyBuilder(abs);
+    // CSS/JS/画像などのリソースはプロキシ経由で取得
+    return proxyBuilder(abs);
   };
-  doc.querySelectorAll('a[href]').forEach(el => fix(el, 'href'));
-  doc.querySelectorAll('link[href]').forEach(el => fix(el, 'href'));
-  doc.querySelectorAll('script[src]').forEach(el => fix(el, 'src'));
-  doc.querySelectorAll('img[src]').forEach(el => fix(el, 'src'));
-  doc.querySelectorAll('source[src],video[src],audio[src],iframe[src]').forEach(el => fix(el, 'src'));
-  doc.querySelectorAll('form[action]').forEach(el => fix(el, 'action'));
+
+  // リンク（ページ遷移）
+  doc.querySelectorAll('a[href]').forEach(el => {
+    const v = el.getAttribute('href');
+    if (!v || /^(javascript:|#|mailto:)/.test(v.trim())) return;
+    try { el.setAttribute('href', proxyBuilder(new URL(v.trim(), baseUrl).href)); } catch {}
+  });
+
+  // サブリソース（CSS・JS・画像など）→ すべてプロキシ経由
+  const fixSrc = (el, attr) => {
+    const v = el.getAttribute(attr);
+    if (!v || /^(data:|blob:|javascript:)/.test(v.trim())) return;
+    try { el.setAttribute(attr, proxyBuilder(new URL(v.trim(), baseUrl).href)); } catch {}
+  };
+
+  doc.querySelectorAll('link[href]').forEach(el => fixSrc(el, 'href'));
+  doc.querySelectorAll('script[src]').forEach(el => fixSrc(el, 'src'));
+  doc.querySelectorAll('img[src]').forEach(el => fixSrc(el, 'src'));
+  doc.querySelectorAll('source[src],video[src],audio[src]').forEach(el => fixSrc(el, 'src'));
+  doc.querySelectorAll('form[action]').forEach(el => fixSrc(el, 'action'));
+
   doc.querySelectorAll('[srcset]').forEach(el => {
     const ns = el.getAttribute('srcset').split(',').map(p => {
       const [u, ...rest] = p.trim().split(/\s+/);
-      try { return [new URL(u, baseUrl).href, ...rest].join(' '); } catch { return p; }
+      try { return [proxyBuilder(new URL(u, baseUrl).href), ...rest].join(' '); } catch { return p; }
     }).join(', ');
     el.setAttribute('srcset', ns);
   });
+
+  // style属性内のurl()もプロキシ経由に
+  doc.querySelectorAll('[style]').forEach(el => {
+    el.setAttribute('style', el.getAttribute('style').replace(
+      /url\(['"]?([^'")\s]+)['"]?\)/g,
+      (_, u) => { try { return `url(${proxyBuilder(new URL(u, baseUrl).href)})`; } catch { return _; } }
+    ));
+  });
+
   doc.querySelectorAll('base').forEach(e => e.remove());
   return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
 }
@@ -671,7 +701,8 @@ async function tryProxy(targetUrl, proxy) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const html = await res.text();
   if (!html.trim()) throw new Error('空のレスポンス');
-  return rewriteHtml(html, targetUrl);
+  // サブリソースもすべて同じプロキシ経由にする
+  return rewriteHtml(html, targetUrl, proxy.build);
 }
 
 async function launch() {
