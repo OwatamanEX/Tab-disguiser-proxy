@@ -605,9 +605,6 @@ function showTab(name) {
 /* ── 無料CORSプロキシ一覧 ──────── */
 const PROXIES = [
   { name: '自分専用プロキシ (Cloudflare)', build: u => `https://tab-disguiser.owatamanmkll.workers.dev/proxy?url=${encodeURIComponent(u)}` },
-  { name: 'allorigins.win',  build: u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
-  { name: 'corsproxy.io',    build: u => `https://corsproxy.io/?${encodeURIComponent(u)}` },
-  { name: 'thingproxy',      build: u => `https://thingproxy.freeboard.io/fetch/${u}` },
 ];
 
 let currentUrl = '';
@@ -700,41 +697,28 @@ async function tryProxy(targetUrl, proxy) {
   const res = await fetch(proxy.build(targetUrl));
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-  // 文字コードを検出して正しくデコードする
   const buf = await res.arrayBuffer();
-  const html = decodeBuffer(buf, res.headers.get('content-type') || '');
+
+  // まずUTF-8で仮読みしてcharsetを調べる
+  const tentative = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(buf).slice(0, 4096));
+  const m = tentative.match(/charset=["']?\s*([^"';\s>]+)/i);
+  const rawCharset = m ? m[1].toLowerCase().trim() : 'utf-8';
+
+  // Shift-JIS系・EUC-JPの場合のみ再デコード
+  let html;
+  if (rawCharset.includes('shift') || rawCharset === 'sjis' || rawCharset === 'x-sjis' || rawCharset.includes('euc')) {
+    const normalized = rawCharset.includes('euc') ? 'euc-jp' : 'shift-jis';
+    try {
+      html = new TextDecoder(normalized, { fatal: false }).decode(buf);
+    } catch {
+      html = tentative;
+    }
+  } else {
+    html = tentative;
+  }
+
   if (!html.trim()) throw new Error('空のレスポンス');
   return rewriteHtml(html, targetUrl, proxy.build);
-}
-
-function decodeBuffer(buf, contentType) {
-  // 1. Content-Typeヘッダーからcharsetを取得
-  let charset = (contentType.match(/charset=([^\s;]+)/i) || [])[1];
-
-  if (!charset) {
-    // 2. HTMLのmeta charsetから検出（UTF-8で仮読みして探す）
-    const tentative = new TextDecoder('utf-8', { fatal: false }).decode(buf.slice(0, 2048));
-    const m = tentative.match(/<meta[^>]+charset=["']?([^"';\s>]+)/i)
-           || tentative.match(/charset=["']([^"']+)/i);
-    if (m) charset = m[1];
-  }
-
-  if (!charset) charset = 'utf-8';
-
-  // Shift_JIS の別名を統一
-  charset = charset.toLowerCase()
-    .replace('shift_jis', 'shift-jis')
-    .replace('shift-jis', 'shift-jis')
-    .replace('sjis', 'shift-jis')
-    .replace('x-sjis', 'shift-jis')
-    .replace('euc-jp', 'euc-jp')
-    .replace('eucjp', 'euc-jp');
-
-  try {
-    return new TextDecoder(charset, { fatal: false }).decode(buf);
-  } catch {
-    return new TextDecoder('utf-8', { fatal: false }).decode(buf);
-  }
 }
 
 async function launch() {
@@ -781,8 +765,12 @@ async function launch() {
     const blob = new Blob([html], { type: 'text/html; charset=utf-8' });
     const blobUrl = URL.createObjectURL(blob);
     const frame = document.getElementById('frame');
-    frame.onload = () => { frame.classList.add('visible'); URL.revokeObjectURL(blobUrl); };
     frame.src = blobUrl;
+    // onloadに頼らず直接表示
+    setTimeout(() => {
+      frame.classList.add('visible');
+      URL.revokeObjectURL(blobUrl);
+    }, 500);
   } else {
     const isLogin = fullUrl.includes('discord') || fullUrl.includes('twitter') || fullUrl.includes('instagram');
     document.getElementById('errBody').textContent =
