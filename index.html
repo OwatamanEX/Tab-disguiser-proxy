@@ -589,7 +589,7 @@
       <button class="vbar-back" style="margin-top:6px" onclick="goBack()">← 戻る</button>
     </div>
 
-    <iframe id="frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe>
+    <iframe id="frame" allowfullscreen></iframe>
   </div>
 </div>
 
@@ -641,6 +641,8 @@ function applyFavicon(v) {
 function rewriteHtml(html, base, proxyBuilder) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const baseUrl = new URL(base);
+  // fetch書き換え用にプロキシのベースURL（url=より前の部分）を取得
+  const PROXY_BASE = proxyBuilder('').replace(/(\?url=|\/\/)$/, '') + (proxyBuilder('').includes('?') ? '?url=' : '/');
 
   // 絶対URLに変換してからプロキシ経由にする
   const toProxied = (v, isLink) => {
@@ -690,6 +692,49 @@ function rewriteHtml(html, base, proxyBuilder) {
   });
 
   doc.querySelectorAll('base').forEach(e => e.remove());
+
+  // ── 強制表示スクリプトを注入 ──
+  const fixScript = doc.createElement('script');
+  fixScript.textContent = `
+(function() {
+  function fixVisibility() {
+    // display:none / visibility:hidden を強制解除
+    var all = document.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      var s = el.style;
+      if (s.display === 'none') s.display = '';
+      if (s.visibility === 'hidden') s.visibility = '';
+    }
+    // body/html の背景が黒・透明なら白に
+    document.documentElement.style.background = document.documentElement.style.background || 'white';
+    document.body.style.background = document.body.style.background || 'white';
+  }
+  // DOM構築直後・ロード後・少し待ってから実行
+  document.addEventListener('DOMContentLoaded', fixVisibility);
+  window.addEventListener('load', fixVisibility);
+  setTimeout(fixVisibility, 500);
+  setTimeout(fixVisibility, 1500);
+  setTimeout(fixVisibility, 3000);
+
+  // fetch・XHRをプロキシ経由に書き換え
+  var PROXY = '${PROXY_BASE}';
+  var origFetch = window.fetch;
+  window.fetch = function(url, opts) {
+    if (typeof url === 'string' && url.startsWith('http')) {
+      url = PROXY + encodeURIComponent(url);
+    }
+    return origFetch.call(this, url, opts);
+  };
+})();
+  `;
+  // <head>の先頭に挿入
+  if (doc.head.firstChild) {
+    doc.head.insertBefore(fixScript, doc.head.firstChild);
+  } else {
+    doc.head.appendChild(fixScript);
+  }
+
   return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
 }
 
